@@ -4,10 +4,10 @@ from __future__ import unicode_literals
 from django.db import models
 
 class GameOverException(Exception):
-    pass
+    message = "The Game is already finished"
 
 class InvalidScoreException(Exception):
-    pass
+    message = "Invalid score."
 
 
 class Frame(models.Model):
@@ -22,6 +22,18 @@ class Frame(models.Model):
     score_one = models.IntegerField(null=True, blank=True)#min max
     score_two = models.IntegerField(null=True, blank=True)#min max
     score_three = models.IntegerField(null=True, blank=True)#min max
+
+    def as_dict(self):
+        return {'frame_id': self.id,
+                'is_spare': self.is_spare,
+                'is_strike': self.is_strike,
+                'is_last_frame': self.is_last_frame,
+                'score': self.score,
+                'score_one': self.score_one,
+                'score_two': self.score_two,
+                'score_three': self.score_three
+        }
+        
 
     def get_score_one(self):
         return self.score_one or 0
@@ -45,6 +57,13 @@ class Game(models.Model):
 
     create_date = models.DateTimeField(auto_now_add=True)
     update_date = models.DateTimeField(auto_now=True)
+
+    def as_dict(self, score=0):
+        return {
+            'game_id': self.id,
+            'is_over': self.is_over,
+            'score': score
+        }
 
     def add_score(self, score):
         if self.is_over:

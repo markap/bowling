@@ -2,14 +2,206 @@
 from __future__ import unicode_literals
 
 from django.test import TestCase
+from rest_framework.test import APIClient
 
 from api import models
+from api import views
+
+class CreateGameViewTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_create_game(self):
+        response = self.client.post('/api/new/', format='json')
+
+        self.assertTrue('game_id' in response.data)
+        game = models.Game.objects.get(pk=response.data.get('game_id'))
+        self.assertTrue(game is not None)
+        self.assertEqual(response.status_code, 200)
+
+    def test_create_game_get_not_allowed(self):
+        response = self.client.get('/api/new/')
+        self.assertEqual(response.status_code, 405)
+
+class GameResultTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.game = models.Game.objects.create()
+
+    def test_game_does_not_exist(self):
+        response = self.client.post('/api/result/', {'game_id': 99}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('error'),
+                         views.ERROR_GAME_DOES_NOT_EXIST)
+
+    def test_empty_game(self):
+        response = self.client.post('/api/result/', {'game_id': self.game.id}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        data = response.data
+        self.assertEqual(data['game_id'], self.game.id)
+        self.assertEqual(data['score'], 0)
+        self.assertEqual(data['is_over'], False)
+        self.assertEqual(len(data['frames']), 0)
+
+    def test_first_legs_game(self):
+        self.game.add_score(5)
+        self.game.add_score(5)
+        self.game.add_score(10)
+        self.game.add_score(0)
+        self.game.add_score(3)
+        response = self.client.post('/api/result/', {'game_id': self.game.id}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        data = response.data
+        self.assertEqual(data['game_id'], self.game.id)
+        self.assertEqual(data['score'], 36)
+        self.assertEqual(data['is_over'], False)
+        self.assertEqual(len(data['frames']), 3)
+        
+        frame = data.get('frames')[0]
+        self.assertEqual(frame['score_one'], 5)
+        self.assertEqual(frame['score_two'], 5)
+        self.assertEqual(frame['score'], 20)
+        self.assertEqual(frame['is_strike'], False)
+        self.assertEqual(frame['is_spare'], True)
+
+        frame = data.get('frames')[1]
+        self.assertEqual(frame['score_one'], 10)
+        self.assertEqual(frame['score_two'], None)
+        self.assertEqual(frame['score'], 33)
+        self.assertEqual(frame['is_strike'], True)
+        self.assertEqual(frame['is_spare'], False)
+
+        frame = data.get('frames')[2]
+        self.assertEqual(frame['score_one'], 0)
+        self.assertEqual(frame['score_two'], 3)
+        self.assertEqual(frame['score'], 36)
+        self.assertEqual(frame['is_strike'], False)
+        self.assertEqual(frame['is_spare'], False)
+
+    def test_get_not_allowed(self):
+        response = self.client.get('/api/result/', {'game_id': self.game.id})
+        self.assertEqual(response.status_code, 405)
+
+    def test_perfect_game(self):
+        for _ in xrange(12):
+            self.game.add_score(10)
+        response = self.client.post('/api/result/', {'game_id': self.game.id}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        data = response.data
+        self.assertEqual(data['game_id'], self.game.id)
+        self.assertEqual(data['score'], 300)
+        self.assertEqual(data['is_over'], True)
+        self.assertEqual(len(data['frames']), 10)
+
+        frame = data.get('frames')[-1]
+        self.assertEqual(frame['score_one'], 10)
+        self.assertEqual(frame['score_two'], 10)
+        self.assertEqual(frame['score_three'], 10)
+        self.assertEqual(frame['score'], 300)
+        self.assertEqual(frame['is_strike'], True)
+        self.assertEqual(frame['is_spare'], False)
+
 
 class AddScoreTest(TestCase):
     def setUp(self):
+        self.client = APIClient()
         self.game = models.Game.objects.create()
 
-   
+    def test_add_score(self):
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 5}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(hasattr(response, 'error'))
+        self.assertEqual(self.game.frames.last().score_one, 5)
+
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 3}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(hasattr(response, 'error'))
+        self.assertEqual(self.game.frames.last().score_two, 3)
+
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 5}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.game.frames.last().score_one, 5)
+        self.assertFalse(hasattr(response, 'error'))
+        self.assertEqual(self.game.frames.count(), 2)
+
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 5}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.game.frames.last().score_two, 5)
+        self.assertFalse(hasattr(response, 'error'))
+        self.assertEqual(self.game.frames.count(), 2)
+
+    def test_add_score_strike(self):
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 10}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(hasattr(response, 'error'))
+        self.assertEqual(self.game.frames.last().score_one, 10)
+
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 10}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(hasattr(response, 'error'))
+        self.assertEqual(self.game.frames.last().score_one, 10)
+
+        self.assertEqual(self.game.frames.count(), 2)
+
+    def test_add_score_miss(self):
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 0}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(hasattr(response, 'error'))
+        self.assertEqual(self.game.frames.last().score_one, 0)
+
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 0}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.game.frames.last().score_one, 0)
+        self.assertFalse(hasattr(response, 'error'))
+        self.assertEqual(self.game.frames.count(), 1)
+
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 0}, format='json')
+        self.assertEqual(self.game.frames.count(), 2)
+
+    def test_add_invalid_score(self):
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 11}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('error'),
+                         models.InvalidScoreException.message)
+
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 0.5}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('error'),
+                         models.InvalidScoreException.message)
+
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 5}, format='json')
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 6}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('error'),
+                         models.InvalidScoreException.message)
+
+
+    def test_add_score_game_over(self):
+        for _ in xrange(12):
+            response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 10}, format='json')
+        response = self.client.post('/api/add/', {'game_id': self.game.id, 'score': 10}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('error'),
+                         models.GameOverException.message)
+
+    def test_add_score_game_does_not_exist(self):
+        response = self.client.post('/api/add/', {'game_id': 99, 'score': 10}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('error'),
+                         views.ERROR_GAME_DOES_NOT_EXIST)
+        
+
+    def test_get_not_allowed(self):
+        response = self.client.get('/api/add/', {'game_id': self.game.id, 'score': 10})
+        self.assertEqual(response.status_code, 405)
+
+class ModelTest(TestCase):
+    def setUp(self):
+        self.game = models.Game.objects.create()
+
     # helper function, mainly to test the various
     # cases how a game can end
     def _create_strike_frames(self, count):
@@ -297,11 +489,6 @@ class AddScoreTest(TestCase):
             frames,
             [10, 10, 20]
         )
-
-
-class CalculateScoreTest(TestCase):
-	def setUp(self):
-		self.game = models.Game.objects.create()
 
 	def test_calculate_lame(self):
 		self.game.add_score(3)
