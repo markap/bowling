@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from api import models
 
+
 ERROR_GAME_DOES_NOT_EXIST = "Game does not exist"
 
 
@@ -50,6 +51,4 @@ class AddScoreView(APIView):
             return Response({'error': e.message})
         except models.Game.DoesNotExist:
             return Response({'error': ERROR_GAME_DOES_NOT_EXIST})
-
-            
 

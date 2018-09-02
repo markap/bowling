@@ -3,15 +3,21 @@ from __future__ import unicode_literals
 
 from django.db import models
 
+
 class GameOverException(Exception):
     message = "The Game is already finished"
+
 
 class InvalidScoreException(Exception):
     message = "Invalid score."
 
 
+MAX_SCORE = 10
+MIN_SCORE = 0
+
+
 class Frame(models.Model):
-    game = models.ForeignKey('Game', related_name='frames') # more attributes?
+    game = models.ForeignKey('Game', related_name='frames')
     create_date = models.DateTimeField(auto_now_add=True)
     update_date = models.DateTimeField(auto_now=True)
 
@@ -19,9 +25,9 @@ class Frame(models.Model):
     is_strike = models.BooleanField(default=False)
     is_last_frame = models.BooleanField(default=False)
 
-    score_one = models.IntegerField(null=True, blank=True)#min max
-    score_two = models.IntegerField(null=True, blank=True)#min max
-    score_three = models.IntegerField(null=True, blank=True)#min max
+    score_one = models.IntegerField(null=True, blank=True)
+    score_two = models.IntegerField(null=True, blank=True)
+    score_three = models.IntegerField(null=True, blank=True)
 
     def as_dict(self):
         return {'frame_id': self.id,
@@ -33,7 +39,6 @@ class Frame(models.Model):
                 'score_two': self.score_two,
                 'score_three': self.score_three
         }
-        
 
     def get_score_one(self):
         return self.score_one or 0
@@ -48,8 +53,10 @@ class Frame(models.Model):
                     self.score_two or 0])
 
     def is_closed(self):
-        return not self.is_last_frame and (self.is_strike or (self.score_one is not None and self.score_two is not None))
+        return not self.is_last_frame and (self.is_strike or self._is_two_times_played())
 
+    def _is_two_times_played(self):
+        return self.score_one is not None and self.score_two is not None
 
 
 class Game(models.Model):
@@ -69,71 +76,80 @@ class Game(models.Model):
         if self.is_over:
             raise GameOverException()
 
-        if score < 0 or score > 10 or not isinstance(score, (int, long)): # todo function
+        if self._is_invalid_score(score):
             raise InvalidScoreException()
-
 
         prev_frame = self.frames.last()
 
         # there is no frame yet 
         # or the previous frame is already closed, 
-        # so let's create a new frame
-        # check if it's the last frame and if there is a strike
-        # and add the score
         if prev_frame is None or (prev_frame and prev_frame.is_closed()): 
-            Frame.objects.create(
-                game=self,
-                score_one=score,
-                is_strike=self._is_strike(score),
-                is_last_frame=self._adding_last_frame()
-            )
+            self._create_new_frame(score)
 
-
-        # we playing in the last frame and we have either a spare or a strike
-        # if it's round three add and close the game, otherwise leave the game open
+        # we are playing in the last frame and we have either a spare or a strike
         elif prev_frame.is_last_frame and (prev_frame.is_strike or prev_frame.is_spare):
-            if prev_frame.score_two is None:
-                prev_frame.score_two = score
-                prev_frame.save()
-            else:
-                prev_frame.score_three = score
-                prev_frame.save()
-
-                self.is_over = True
-                self.save()
-            
-        # the typical second shot 
-        # check if it is a spare and if it's the last frame 
-        # and it's not a spare the game is over
+            self._add_score_for_last_frame(prev_frame, score)
+           
+        # the ordinary second shot 
         else:
-            # update prev frame
-            if prev_frame.score_one + score > 10: # function
+            if prev_frame.score_one + score > MAX_SCORE:
                 raise InvalidScoreException()
 
-            prev_frame.score_two = score
-            prev_frame.is_spare = self._is_spare(prev_frame.score_one, score)
-            prev_frame.save()
+            self._add_score_for_second_ball(prev_frame, score)
 
-            if prev_frame.is_last_frame and not prev_frame.is_spare:
-                self.is_over = True
-                self.save()
+    def _is_invalid_score(self, score):
+        return score < MIN_SCORE or score > MAX_SCORE or not isinstance(score, (int, long))
 
+    # create a new frame
+    # check if it's the last frame and if there is a strike
+    # and add the score
+    def _create_new_frame(self, score):
+        Frame.objects.create(
+            game=self,
+            score_one=score,
+            is_strike=self._is_strike(score),
+            is_last_frame=self._adding_last_frame()
+        )
+
+    # last frame and there was a strike or spare
+    # if it's round three add and close the game
+    # otherwise leave the game open
+    def _add_score_for_last_frame(self, frame, score):
+        if frame.score_two is None:
+            frame.score_two = score
+            frame.save()
+        else:
+            frame.score_three = score
+            frame.save()
+            self.is_over = True
+            self.save()
+
+    # check if it is a spare and if it's the last frame 
+    # and it's not a spare the game is over
+    def _add_score_for_second_ball(self, frame, score):
+        frame.score_two = score
+        frame.is_spare = self._is_spare(frame.score_one, score)
+        frame.save()
+
+        if frame.is_last_frame and not frame.is_spare:
+            self.is_over = True
+            self.save()
 
     def _adding_last_frame(self):
-        print self.frames.count()
-        return self.frames.count() == 9 # todo const
+        return self.frames.count() == MAX_SCORE - 1 
     
     def _is_strike(self, score):
-        if score == 10: #TODO const #todo function
+        if score == MAX_SCORE:
             return True
         return False
 
     def _is_spare(self, score_one, score_two):
-        if score_one + score_two == 10: #TODO const
+        if score_one + score_two == MAX_SCORE:
             return True
         return False
 
-
+    # calculate the total score and also the score of each frame
+    # return score and a list of frames with score attribute per frame
     def calculate_score(self):
         frame_list = [frame for frame in self.frames.all()]
         frame_list_calculated = []
@@ -146,12 +162,15 @@ class Game(models.Model):
             return next_frame
 
         for index, frame in enumerate(frame_list):
+            # normal score per frame
             score = frame.get_frame_score()
 
             next_frame = _get_next_frame(frame_list, index+1)
+            # check for extra points because of spare
             if frame.is_spare and next_frame:
                 score += next_frame.get_score_one()
             
+            # check for extra points because of strike
             elif frame.is_strike and next_frame:
                 score += next_frame.get_frame_score_for_strike()
 
@@ -163,14 +182,5 @@ class Game(models.Model):
             frame_list[index].score = sum(frame_list_calculated)
             
         return sum(frame_list_calculated), frame_list
-
-
-                
-
-
-
-
-
-        
 
 
