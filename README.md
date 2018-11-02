@@ -1,7 +1,7 @@
   
 # Bowling  API
 
-Simple API for ten-pin bowling. 
+Simple API for ten-pin bowling
 [https://en.wikipedia.org/wiki/Ten-pin_bowling#Scoring](https://en.wikipedia.org/wiki/Ten-pin_bowling)
 
 ## Installation
